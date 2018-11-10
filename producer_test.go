@@ -17,7 +17,7 @@ func TestNewProducer(t *testing.T) {
 
 	srClient := &mockSchemaRegistryClient{}
 
-	p, err := kafkaavro.NewProducer("topic", "string", "string", kp, srClient)
+	p, err := kafkaavro.NewProducer("topic", "\"string\"", "\"string\"", kp, srClient)
 	if err != nil {
 		t.Fatalf("Error creating producer: %+v", err.Error())
 	}
