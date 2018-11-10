@@ -4,8 +4,8 @@ github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db h1:woRePGFeVFfLKN/pO
 github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
 github.com/landoop/schema-registry v0.0.0-20180614054439-8473163e8587 h1:z5RQnj+2TtCS4OvIbk6OeduSNb33i271L/5O4xqCgMI=
 github.com/landoop/schema-registry v0.0.0-20180614054439-8473163e8587/go.mod h1:yITyTTMx2IS5mpfZjQ64gJhL5U5RvcorFBu+z4/euXg=
-github.com/linkedin/goavro v2.1.0+incompatible h1:DV2aUlj2xZiuxQyvag8Dy7zjY69ENjS66bWkSfdpddY=
-github.com/linkedin/goavro v2.1.0+incompatible/go.mod h1:bBCwI2eGYpUI/4820s67MElg9tdeLbINjLjiM2xZFYM=
+github.com/linkedin/goavro v0.0.0-20181018120728-1beee2a74088 h1:T+kPxsfvkFtz7x6ysgOYjki7khHjowQW6DD1rcpOS0Q=
+github.com/linkedin/goavro v0.0.0-20181018120728-1beee2a74088/go.mod h1:vL3ODoWTPCBSeKVFgQ+lvSq0VOzTB5TcXvUX+4pU/+Q=
 github.com/pkg/errors v0.8.0 h1:WdK/asTD0HN+q6hsWO3/vpuAkAr+tw6aNJNDFFf0+qw=
 github.com/pkg/errors v0.8.0/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 gopkg.in/linkedin/goavro.v1 v1.0.5 h1:BJa69CDh0awSsLUmZ9+BowBdokpduDZSM9Zk8oKHfN4=
