@@ -2,6 +2,8 @@ package kafkaavro
 
 import (
 	"encoding/binary"
+	"fmt"
+
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/pkg/errors"
 )
@@ -11,6 +13,7 @@ type Consumer struct {
 	schemaRegistryClient SchemaRegistryClient
 	stopChan             chan struct{}
 	pollTimeout          int
+	topics               []string
 }
 
 type ConsumerMessage struct {
@@ -31,6 +34,7 @@ func NewConsumer(topics []string, consumer *kafka.Consumer, schemaRegistryClient
 		consumer:             consumer,
 		schemaRegistryClient: schemaRegistryClient,
 		pollTimeout:          100,
+		topics:               topics,
 	}, nil
 }
 
@@ -97,4 +101,27 @@ func (ac *Consumer) decodeAvroBinary(data []byte) (interface{}, error) {
 		return nil, err
 	}
 	return native, err
+}
+
+// EnsureTopics returns error if one of the consumed topics
+// was not found on the server.
+func (ac *Consumer) EnsureTopics() error {
+	notFound := make([]string, 0)
+
+	meta, err := ac.consumer.GetMetadata(nil, true, 6000)
+	if err != nil {
+		return err
+	}
+
+	for _, topic := range ac.topics {
+		if _, ok := meta.Topics[topic]; !ok {
+			notFound = append(notFound, topic)
+		}
+	}
+
+	if len(notFound) > 0 {
+		return fmt.Errorf("topics not found: %v", notFound)
+	}
+
+	return nil
 }
