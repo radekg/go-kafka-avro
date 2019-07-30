@@ -1,16 +1,17 @@
 package kafkaavro_test
 
 import (
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/mycujoo/go-kafka-avro"
 	"testing"
+
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	kafkaavro "github.com/mycujoo/go-kafka-avro"
 )
 
 func TestConsumer(t *testing.T) {
 
 	kc, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"group.id":                 "gotest",
-		"socket.timeout.ms":        10,
+		"socket.timeout.ms":        1100,
 		"session.timeout.ms":       10,
 		"enable.auto.offset.store": false, // permit StoreOffsets()
 	})
@@ -27,15 +28,12 @@ func TestConsumer(t *testing.T) {
 	ch := make(chan struct{})
 	c.Messages(ch)
 	close(ch)
-
-	t.Logf("Consumer %v", c)
 }
 
 func TestConsumer_SubscribeTopics(t *testing.T) {
-
 	kc, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"group.id":                 "gotest",
-		"socket.timeout.ms":        10,
+		"socket.timeout.ms":        1100,
 		"session.timeout.ms":       10,
 		"enable.auto.offset.store": false, // permit StoreOffsets()
 	})
@@ -56,8 +54,5 @@ func TestConsumer_SubscribeTopics(t *testing.T) {
 		t.Errorf("Subscribe failed: %s", err)
 	}
 
-
 	close(ch)
-
-	t.Logf("Consumer %v", c)
 }

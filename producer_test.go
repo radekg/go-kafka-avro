@@ -1,15 +1,16 @@
 package kafkaavro_test
 
 import (
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/mycujoo/go-kafka-avro"
 	"testing"
+
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	kafkaavro "github.com/mycujoo/go-kafka-avro"
 )
 
 func TestNewProducer(t *testing.T) {
 
 	kp, err := kafka.NewProducer(&kafka.ConfigMap{
-		"socket.timeout.ms":    10,
+		"socket.timeout.ms":    1100,
 		"default.topic.config": kafka.ConfigMap{"message.timeout.ms": 10}})
 	if err != nil {
 		t.Errorf("Error creating kafka producer: %+v", err.Error())
