@@ -8,8 +8,13 @@ import (
 	"github.com/pkg/errors"
 )
 
+type kafkaProducer interface {
+	Close()
+	Produce(msg *kafka.Message, deliveryChan chan kafka.Event) error
+}
+
 type Producer struct {
-	producer       *kafka.Producer
+	producer       kafkaProducer
 	topicPartition kafka.TopicPartition
 
 	schemaRegistryClient       SchemaRegistryClient
@@ -24,8 +29,7 @@ type Producer struct {
 }
 
 // NewProducer is a producer that publishes messages to kafka topic using avro serialization format
-func NewProducer(topic string, keySchema string, valueSchema string, producer *kafka.Producer, schemaRegistryClient SchemaRegistryClient) (*Producer, error) {
-
+func NewProducer(topic string, keySchema string, valueSchema string, producer kafkaProducer, schemaRegistryClient SchemaRegistryClient) (*Producer, error) {
 	if producer == nil {
 		return nil, errors.New("missing producer")
 	}
