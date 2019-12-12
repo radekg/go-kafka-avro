@@ -16,11 +16,11 @@ type SchemaRegistryClient interface {
 
 // CachedSchemaRegistryClient is a schema registry client that will cache some data to improve performance
 type CachedSchemaRegistryClient struct {
-	SchemaRegistryClient *schemaregistry.Client
-	schemaCache          map[int]*goavro.Codec
-	schemaCacheLock      sync.RWMutex
-	schemaIdCache        map[string]int
-	schemaIdCacheLock    sync.RWMutex
+	SchemaRegistryClient   *schemaregistry.Client
+	schemaCache            map[int]*goavro.Codec
+	schemaCacheLock        sync.RWMutex
+	registeredSubjects     map[string]int
+	registeredSubjectsLock sync.RWMutex
 }
 
 func NewCachedSchemaRegistryClient(baseURL string, options ...schemaregistry.Option) (*CachedSchemaRegistryClient, error) {
@@ -31,7 +31,7 @@ func NewCachedSchemaRegistryClient(baseURL string, options ...schemaregistry.Opt
 	return &CachedSchemaRegistryClient{
 		SchemaRegistryClient: srClient,
 		schemaCache:          make(map[int]*goavro.Codec),
-		schemaIdCache:        make(map[string]int),
+		registeredSubjects:   make(map[string]int),
 	}, nil
 }
 
@@ -88,9 +88,9 @@ func (cached *CachedSchemaRegistryClient) GetLatestSchema(subject string) (*goav
 // RegisterNewSchema will return and cache the id with the given codec
 func (cached *CachedSchemaRegistryClient) RegisterNewSchema(subject string, codec *goavro.Codec) (int, error) {
 	schemaJson := codec.Schema()
-	cached.schemaIdCacheLock.RLock()
-	cachedResult, found := cached.schemaIdCache[schemaJson]
-	cached.schemaIdCacheLock.RUnlock()
+	cached.registeredSubjectsLock.RLock()
+	cachedResult, found := cached.registeredSubjects[subject]
+	cached.registeredSubjectsLock.RUnlock()
 	if found {
 		return cachedResult, nil
 	}
@@ -98,9 +98,9 @@ func (cached *CachedSchemaRegistryClient) RegisterNewSchema(subject string, code
 	if err != nil {
 		return 0, err
 	}
-	cached.schemaIdCacheLock.Lock()
-	cached.schemaIdCache[schemaJson] = id
-	cached.schemaIdCacheLock.Unlock()
+	cached.registeredSubjectsLock.Lock()
+	cached.registeredSubjects[subject] = id
+	cached.registeredSubjectsLock.Unlock()
 	return id, nil
 }
 

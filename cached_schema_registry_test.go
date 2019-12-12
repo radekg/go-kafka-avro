@@ -71,6 +71,10 @@ func createSchemaRegistryTestObject(t *testing.T, subject string, id int) *TestO
 				response := idResponse{id}
 				str, _ := json.Marshal(response)
 				fmt.Fprintf(w, string(str))
+			case fmt.Sprintf(subjectVersions, subject+"2"), fmt.Sprintf(deleteSubject, subject+"2"):
+				response := idResponse{id}
+				str, _ := json.Marshal(response)
+				fmt.Fprintf(w, string(str))
 			}
 		} else if r.Method == "GET" {
 			switch r.URL.String() {
@@ -216,6 +220,28 @@ func TestCachedSchemaRegistryClient_CreateSubject(t *testing.T) {
 	}
 	if testObject.Count > 1 {
 		t.Errorf("Expected call count of 1, got %d", testObject.Count)
+	}
+	newid, err := client.RegisterNewSchema("test2", testObject.Codec)
+	if nil != err {
+		t.Errorf("Error getting schema: %s", err.Error())
+	}
+	// we still get same id, just for a different subject
+	if newid != id {
+		t.Errorf("Ids do not match. Expected: %d, got: %d", id, sameid)
+	}
+	if testObject.Count != 2 {
+		t.Errorf("Expected call count of 2, got %d", testObject.Count)
+	}
+	newid, err = client.RegisterNewSchema("test2", testObject.Codec)
+	if nil != err {
+		t.Errorf("Error getting schema: %s", err.Error())
+	}
+	// we still get same id, just for a different subject
+	if newid != id {
+		t.Errorf("Ids do not match. Expected: %d, got: %d", id, sameid)
+	}
+	if testObject.Count != 2 {
+		t.Errorf("Expected call count of 2, got %d", testObject.Count)
 	}
 }
 
