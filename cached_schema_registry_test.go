@@ -8,8 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linkedin/goavro"
-
+	"github.com/hamba/avro"
 	kafkaavro "github.com/mycujoo/go-kafka-avro"
 )
 
@@ -17,17 +16,17 @@ import (
 
 type mockSchemaRegistryClient struct{}
 
-func (mockSchemaRegistryClient) GetSchemaByID(id int) (*goavro.Codec, error) {
-	return goavro.NewCodec("string")
+func (mockSchemaRegistryClient) GetSchemaByID(id int) (avro.Schema, error) {
+	return avro.Parse("string")
 }
 
-func (mockSchemaRegistryClient) RegisterNewSchema(subject string, codec *goavro.Codec) (int, error) {
+func (mockSchemaRegistryClient) RegisterNewSchema(subject string, schema avro.Schema) (int, error) {
 	return 1, nil
 }
 
 type TestObject struct {
 	MockServer *httptest.Server
-	Codec      *goavro.Codec
+	Schema     avro.Schema
 	Subject    string
 	ID         int
 	Count      int
@@ -57,11 +56,11 @@ func createSchemaRegistryTestObject(t *testing.T, subject string, id int) *TestO
 	testObject.Subject = subject
 	testObject.ID = id
 	testObject.Count = 0
-	codec, err := goavro.NewCodec(`{"type": "record", "name": "test", "fields" : [{"name": "val", "type": "int", "default": 0}]}`)
+	schema, err := avro.Parse(`{"type": "record", "name": "test", "fields" : [{"name": "val", "type": "int", "default": 0}]}`)
 	if err != nil {
-		t.Errorf("Could not create codec %v", err)
+		t.Errorf("Could not create schema %v", err)
 	}
-	testObject.Codec = codec
+	testObject.Schema = schema
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		testObject.Count++
@@ -79,7 +78,7 @@ func createSchemaRegistryTestObject(t *testing.T, subject string, id int) *TestO
 		} else if r.Method == "GET" {
 			switch r.URL.String() {
 			case fmt.Sprintf(schemaByID, id):
-				escapedSchema := strings.Replace(codec.Schema(), "\"", "\\\"", -1)
+				escapedSchema := strings.Replace(schema.String(), "\"", "\\\"", -1)
 				fmt.Fprintf(w, `{"schema": "%s"}`, escapedSchema)
 			case subjects:
 				response := []string{subject}
@@ -90,7 +89,7 @@ func createSchemaRegistryTestObject(t *testing.T, subject string, id int) *TestO
 				str, _ := json.Marshal(response)
 				fmt.Fprintf(w, string(str))
 			case fmt.Sprintf(subjectByVersion, subject, "1"), fmt.Sprintf(subjectByVersion, subject, "latest"):
-				response := schemaVersionResponse{subject, 1, codec.Schema(), id}
+				response := schemaVersionResponse{subject, 1, schema.String(), id}
 				str, _ := json.Marshal(response)
 				fmt.Fprintf(w, string(str))
 			}
@@ -114,14 +113,19 @@ func TestCachedSchemaRegistryClient_GetSchemaByID(t *testing.T) {
 	client, err := kafkaavro.NewCachedSchemaRegistryClient(mockServer.URL)
 	if nil != err {
 		t.Errorf("Error creating cached schema registry client: %s", err.Error())
+		return
 	}
-	client.GetSchemaByID(1)
-	responseCodec, err := client.GetSchemaByID(1)
+	_, err = client.GetSchemaByID(1)
 	if nil != err {
 		t.Errorf("Error getting schema: %s", err.Error())
 	}
-	if responseCodec.Schema() != testObject.Codec.Schema() {
-		t.Errorf("Schemas do not match. Expected: %s, got: %s", testObject.Codec.Schema(), responseCodec.Schema())
+	responseSchema, err := client.GetSchemaByID(1)
+	if nil != err {
+		t.Errorf("Error getting schema: %s", err.Error())
+		return
+	}
+	if responseSchema.String() != testObject.Schema.String() {
+		t.Errorf("Schemas do not match. Expected: %s, got: %s", testObject.Schema.String(), responseSchema.String())
 	}
 	if testObject.Count > 1 {
 		t.Errorf("Expected call count of 1, got %d", testObject.Count)
@@ -135,6 +139,7 @@ func TestCachedSchemaRegistryClient_Subjects(t *testing.T) {
 	client, err := kafkaavro.NewCachedSchemaRegistryClient(mockServer.URL)
 	if nil != err {
 		t.Errorf("Error creating cached schema registry client: %s", err.Error())
+		return
 	}
 	subjects, err := client.Subjects()
 	if nil != err {
@@ -170,12 +175,12 @@ func TestCachedSchemaRegistryClient_GetSchemaByVersion(t *testing.T) {
 	if nil != err {
 		t.Errorf("Error creating cached schema registry client: %s", err.Error())
 	}
-	responseCodec, err := client.GetSchemaBySubject(testObject.Subject, 1)
+	responseSchema, err := client.GetSchemaBySubject(testObject.Subject, 1)
 	if nil != err {
 		t.Errorf("Error getting schema versions: %v", err)
 	}
-	if responseCodec.Schema() != testObject.Codec.Schema() {
-		t.Errorf("Schemas do not match. Expected: %s, got: %s", testObject.Codec.Schema(), responseCodec.Schema())
+	if responseSchema.String() != testObject.Schema.String() {
+		t.Errorf("Schemas do not match. Expected: %s, got: %s", testObject.Schema.String(), responseSchema.String())
 	}
 }
 
@@ -187,12 +192,12 @@ func TestCachedSchemaRegistryClient_GetLatestSchema(t *testing.T) {
 	if nil != err {
 		t.Errorf("Error creating cached schema registry client: %s", err.Error())
 	}
-	responseCodec, err := client.GetLatestSchema(testObject.Subject)
+	responseSchema, err := client.GetLatestSchema(testObject.Subject)
 	if nil != err {
 		t.Errorf("Error getting latest schema: %v", err)
 	}
-	if responseCodec.Schema() != testObject.Codec.Schema() {
-		t.Errorf("Schemas do not match. Expected: %s, got: %s", testObject.Codec.Schema(), responseCodec.Schema())
+	if responseSchema.String() != testObject.Schema.String() {
+		t.Errorf("Schemas do not match. Expected: %s, got: %s", testObject.Schema.String(), responseSchema.String())
 	}
 }
 
@@ -204,14 +209,14 @@ func TestCachedSchemaRegistryClient_CreateSubject(t *testing.T) {
 	if nil != err {
 		t.Errorf("Error creating cached schema registry client: %s", err.Error())
 	}
-	id, err := client.RegisterNewSchema(testObject.Subject, testObject.Codec)
+	id, err := client.RegisterNewSchema(testObject.Subject, testObject.Schema)
 	if nil != err {
 		t.Errorf("Error getting schema: %s", err.Error())
 	}
 	if id != testObject.ID {
 		t.Errorf("Ids do not match. Expected: %d, got: %d", testObject.ID, id)
 	}
-	sameid, err := client.RegisterNewSchema(testObject.Subject, testObject.Codec)
+	sameid, err := client.RegisterNewSchema(testObject.Subject, testObject.Schema)
 	if nil != err {
 		t.Errorf("Error getting schema: %s", err.Error())
 	}
@@ -221,7 +226,7 @@ func TestCachedSchemaRegistryClient_CreateSubject(t *testing.T) {
 	if testObject.Count > 1 {
 		t.Errorf("Expected call count of 1, got %d", testObject.Count)
 	}
-	newid, err := client.RegisterNewSchema("test2", testObject.Codec)
+	newid, err := client.RegisterNewSchema("test2", testObject.Schema)
 	if nil != err {
 		t.Errorf("Error getting schema: %s", err.Error())
 	}
@@ -232,7 +237,7 @@ func TestCachedSchemaRegistryClient_CreateSubject(t *testing.T) {
 	if testObject.Count != 2 {
 		t.Errorf("Expected call count of 2, got %d", testObject.Count)
 	}
-	newid, err = client.RegisterNewSchema("test2", testObject.Codec)
+	newid, err = client.RegisterNewSchema("test2", testObject.Schema)
 	if nil != err {
 		t.Errorf("Error getting schema: %s", err.Error())
 	}
@@ -253,7 +258,7 @@ func TestCachedSchemaRegistryClient_IsSchemaRegistered(t *testing.T) {
 	if nil != err {
 		t.Errorf("Error creating cached schema registry client: %s", err.Error())
 	}
-	found, schema, err := client.IsSchemaRegistered(testObject.Subject, testObject.Codec)
+	found, schema, err := client.IsSchemaRegistered(testObject.Subject, testObject.Schema)
 	if nil != err {
 		t.Errorf("Error getting schema id: %v", err)
 	}

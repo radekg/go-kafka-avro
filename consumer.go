@@ -2,184 +2,196 @@ package kafkaavro
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
+	"net/url"
 
+	"github.com/caarlos0/env/v6"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/hamba/avro"
 	"github.com/pkg/errors"
 )
 
-type Consumer struct {
-	consumer             *kafka.Consumer
-	schemaRegistryClient SchemaRegistryClient
-	stopChan             chan struct{}
-	pollTimeout          int
-	topics               []string
+type KafkaConsumer interface {
+	CommitMessage(m *kafka.Message) ([]kafka.TopicPartition, error)
+	SubscribeTopics(topics []string, rebalanceCb kafka.RebalanceCb) (err error)
+	Poll(timeoutMs int) kafka.Event
+	GetMetadata(topic *string, allTopics bool, timeoutMs int) (*kafka.Metadata, error)
 }
 
-type ConsumerMessage struct {
+type Consumer struct {
+	KafkaConsumer
+	valueFactory ValueFactory
+	ensureTopics bool
+	avroAPI      avro.API
+	kafkaCfg     *kafka.ConfigMap
+	srURL        *url.URL
+	srClient     SchemaRegistryClient
+}
+
+type ValueFactory func(topic string) interface{}
+
+type Message struct {
 	*kafka.Message
-	Error error
-
-	// Message Value parsed into maps/structs
-	Parsed interface{}
-
-	// JSON representation of the message
-	Textual []byte
+	Value interface{}
 }
 
 // NewConsumer is a basic consumer to interact with schema registry, avro and kafka
-func NewConsumer(topics []string, consumer *kafka.Consumer, schemaRegistryClient SchemaRegistryClient) (*Consumer, error) {
-
-	if topics != nil {
-		if err := consumer.SubscribeTopics(topics, nil); err != nil {
-			return nil, err
-		}
+func NewConsumer(topics []string, valueFactory ValueFactory, opts ...ConsumerOption) (*Consumer, error) {
+	c := &Consumer{
+		valueFactory: valueFactory,
+		avroAPI:      avro.DefaultConfig,
+		ensureTopics: true,
+	}
+	// Loop through each option
+	for _, opt := range opts {
+		// apply option
+		opt.applyC(c)
 	}
 
-	return &Consumer{
-		consumer:             consumer,
-		schemaRegistryClient: schemaRegistryClient,
-		pollTimeout:          100,
-		topics:               topics,
-	}, nil
-}
+	var err error
 
-func (ac *Consumer) SubscribeTopics(topics []string, rebalanceCb kafka.RebalanceCb) error {
-	ac.topics = topics
-	return ac.consumer.SubscribeTopics(topics, rebalanceCb)
-}
+	// if consumer not provided - make one
+	if c.KafkaConsumer == nil {
+		// if kafka config not provided - build default one
+		if c.kafkaCfg == nil {
+			var envCfg struct {
+				Broker          string `env:"KAFKA_BROKER" envDefault:"localhost:9092"`
+				CAFile          string `env:"KAFKA_CA_FILE"`
+				KeyFile         string `env:"KAFKA_KEY_FILE"`
+				CertificateFile string `env:"KAFKA_CERTIFICATE_FILE"`
+				GroupID         string `env:"KAFKA_GROUP_ID"`
+			}
+			if err := env.Parse(&envCfg); err != nil {
+				return nil, err
+			}
 
-// Messages returns the ConsumerMessage channel (that contains decoded messages)
-// and other events channel for events like kafka.PartitionEOF, kafka.Stats
-func (ac *Consumer) Messages(stopChan chan struct{}) (chan ConsumerMessage, chan kafka.Event) {
-	output := make(chan ConsumerMessage)
-	other := make(chan kafka.Event)
-	if ac.stopChan != nil {
-		// stop channel already open
-		close(ac.stopChan)
-	}
-	ac.stopChan = stopChan
-	go func() {
-		run := true
-		for run {
-			select {
-			case <-stopChan:
-				run = false
+			// default configuration
+			c.kafkaCfg = &kafka.ConfigMap{
+				"bootstrap.servers":       envCfg.Broker,
+				"socket.keepalive.enable": true,
+				"enable.auto.commit":      false,
+				"enable.partition.eof":    true,
+				"session.timeout.ms":      6000,
+				"auto.offset.reset":       "earliest",
+				"group.id":                envCfg.GroupID,
+			}
 
-			default:
-				ev := ac.consumer.Poll(ac.pollTimeout)
-				if ev == nil {
-					continue
-				}
-
-				switch e := ev.(type) {
-				case *kafka.Message:
-					parsed, textual, err := ac.decodeAvroBinary(e.Value)
-
-					if err != nil {
-						output <- ConsumerMessage{
-							Message: e,
-							Error:   err,
-						}
-
-						continue
-					}
-
-					msg := ConsumerMessage{
-						Message: e,
-						Parsed:  parsed,
-						Textual: textual,
-					}
-
-					if _, err = json.Marshal(msg.Parsed); err != nil {
-						msg.Error = err
-						output <- msg
-
-						continue
-					}
-
-					if e.TopicPartition.Topic == nil {
-						msg.Error = errors.New("null topic")
-						output <- msg
-
-						continue
-					}
-
-					if msg.Parsed == nil {
-						msg.Error = errors.New("missing parsed data")
-						output <- msg
-
-						continue
-					}
-
-					if _, ok := msg.Parsed.(map[string]interface{}); !ok {
-						msg.Error = errors.New("parsed data is wrong type")
-						output <- msg
-
-						continue
-					}
-
-					output <- ConsumerMessage{
-						Message: e,
-						Parsed:  parsed,
-						Textual: textual,
-					}
-
-				default:
-					other <- e
-				}
+			if envCfg.CAFile != "" {
+				// configure SSL
+				c.kafkaCfg.SetKey("security.protocol", "ssl")
+				c.kafkaCfg.SetKey("ssl.ca.location", envCfg.CAFile)
+				c.kafkaCfg.SetKey("ssl.key.location", envCfg.KeyFile)
+				c.kafkaCfg.SetKey("ssl.certificate.location", envCfg.CertificateFile)
 			}
 		}
-	}()
 
-	return output, other
+		if c.KafkaConsumer, err = kafka.NewConsumer(c.kafkaCfg); err != nil {
+			return nil, errors.WithMessage(err, "cannot initialize kafka consumer")
+		}
+	}
+
+	if c.srClient == nil {
+		if c.srURL == nil {
+			var envCfg struct {
+				SchemaRegistry *url.URL `env:"KAFKA_SCHEMA_REGISTRY" envDefault:"http://localhost:8081"`
+			}
+			if err := env.Parse(&envCfg); err != nil {
+				return nil, err
+			}
+			c.srURL = envCfg.SchemaRegistry
+		}
+
+		if c.srClient, err = NewCachedSchemaRegistryClient(c.srURL.String()); err != nil {
+			return nil, errors.WithMessage(err, "cannot initialize schema registry client")
+		}
+	}
+
+	if topics != nil {
+		if err := c.KafkaConsumer.SubscribeTopics(topics, nil); err != nil {
+			return nil, err
+		}
+
+		if c.ensureTopics {
+			if err = c.EnsureTopics(topics); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return c, nil
 }
 
-func (ac *Consumer) CommitMessage(msg ConsumerMessage) ([]kafka.TopicPartition, error) {
-	return ac.consumer.CommitMessage(msg.Message)
+func (ac *Consumer) fetchMessage(timeoutMs int) (*kafka.Message, error) {
+	ev := ac.KafkaConsumer.Poll(timeoutMs)
+	if ev == nil {
+		return nil, nil
+	}
+	switch e := ev.(type) {
+	case *kafka.Message:
+		return e, nil
+	case kafka.PartitionEOF:
+		return nil, ErrPartitionEOF
+	default:
+		return nil, nil
+	}
 }
 
-func (ac *Consumer) Close() {
-	ac.consumer.Close()
-	close(ac.stopChan)
+func (ac *Consumer) FetchMessage(timeoutMs int) (*Message, error) {
+	msg, err := ac.fetchMessage(timeoutMs)
+	if err != nil {
+		return nil, err
+	}
+	if msg == nil {
+		return nil, ErrPollTimeout
+	}
+
+	value := ac.valueFactory(*msg.TopicPartition.Topic)
+	if value == nil {
+		return nil, ErrInvalidValue{Topic: *msg.TopicPartition.Topic}
+	}
+
+	err = ac.decodeAvroBinary(msg.Value, &value)
+	return &Message{
+		Message: msg,
+		Value:   value,
+	}, err
 }
 
-func (ac *Consumer) decodeAvroBinary(data []byte) (interface{}, []byte, error) {
+func (ac *Consumer) ReadMessage(timeoutMs int) (*Message, error) {
+	msg, err := ac.FetchMessage(timeoutMs)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = ac.KafkaConsumer.CommitMessage(msg.Message); err != nil {
+		err = ErrFailedCommit{Err: err}
+	}
+	return msg, err
+}
+
+func (ac *Consumer) decodeAvroBinary(data []byte, v interface{}) error {
 	if data[0] != 0 {
-		return nil, nil, errors.New("invalid magic byte")
+		return errors.New("invalid magic byte")
 	}
 	schemaId := binary.BigEndian.Uint32(data[1:5])
-	codec, err := ac.schemaRegistryClient.GetSchemaByID(int(schemaId))
-	if err != nil {
-		return nil, nil, err
-	}
-	// Convert binary Avro data back to native Go form
-	native, _, err := codec.NativeFromBinary(data[5:])
-	if err != nil {
-		return nil, nil, err
-	}
-
-	textual, err := codec.TextualFromNative(nil, native)
-
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return native, textual, err
-}
-
-// EnsureTopics returns error if one of the consumed topics
-// was not found on the server.
-func (ac *Consumer) EnsureTopics() error {
-	notFound := make([]string, 0)
-
-	meta, err := ac.consumer.GetMetadata(nil, true, 6000)
+	schema, err := ac.srClient.GetSchemaByID(int(schemaId))
 	if err != nil {
 		return err
 	}
 
-	for _, topic := range ac.topics {
+	return ac.avroAPI.Unmarshal(schema, data[5:], v)
+}
+
+// EnsureTopics returns error if one of the consumed topics
+// was not found on the server.
+func (ac *Consumer) EnsureTopics(topics []string) error {
+	notFound := make([]string, 0)
+
+	meta, err := ac.KafkaConsumer.GetMetadata(nil, true, 6000)
+	if err != nil {
+		return err
+	}
+
+	for _, topic := range topics {
 		if _, ok := meta.Topics[topic]; !ok {
 			notFound = append(notFound, topic)
 		}

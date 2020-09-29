@@ -5,41 +5,54 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	kafkaavro "github.com/mycujoo/go-kafka-avro"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewProducer(t *testing.T) {
-	kp, err := kafka.NewProducer(&kafka.ConfigMap{
-		"socket.timeout.ms":    1100,
-		"default.topic.config": kafka.ConfigMap{"message.timeout.ms": 10}})
-	if err != nil {
-		t.Errorf("Error creating kafka producer: %+v", err.Error())
-	}
+	kp := &mockKafkaProducer{}
 
 	srClient := &mockSchemaRegistryClient{}
 
-	p, err := kafkaavro.NewProducer(kafkaavro.ProducerConfig{
-		TopicName:            "topic",
-		KeySchema:            `"string"`,
-		ValueSchema:          `"string"`,
-		Producer:             kp,
-		SchemaRegistryClient: srClient,
-	})
+	p, err := kafkaavro.NewProducer(
+		"topic",
+		`"string"`,
+		`"string"`,
+		kafkaavro.WithKafkaProducer(kp),
+		kafkaavro.WithSchemaRegistryClient(srClient),
+	)
 	if err != nil {
 		t.Fatalf("Error creating producer: %+v", err.Error())
 	}
 
+	kp.On("Produce", mock.AnythingOfType("*kafka.Message"), mock.Anything).Return(nil)
+
 	err = p.Produce("key", "value", nil)
-	if err == nil || err.Error() != "Local: Message timed out" {
-		t.Errorf("Expected timeout error")
-	}
+	require.NoError(t, err)
 
 	err = p.Produce("key", struct{ ID string }{ID: "id"}, nil)
-	if err == nil {
-		t.Fatalf("Expected error for message")
-	}
-	if err.Error() != "cannot encode binary bytes: expected: string; received: struct { ID string }" {
-		t.Fatalf("Unexpected error: %+v", err)
-	}
+	require.Error(t, err)
+	assert.EqualError(t, err, "avro: struct { ID string } is unsupported for Avro string")
 
+	kp.On("Close").Return()
 	p.Close()
+}
+
+type mockKafkaProducer struct {
+	mock.Mock
+}
+
+func (m *mockKafkaProducer) Close() {
+	m.Called()
+}
+
+func (m *mockKafkaProducer) Produce(msg *kafka.Message, deliveryChan chan kafka.Event) error {
+	ret := m.Called(msg, deliveryChan)
+	go func(deliveryChan chan kafka.Event) {
+		if deliveryChan != nil {
+			deliveryChan <- &kafka.Message{}
+		}
+	}(deliveryChan)
+	return ret.Error(0)
 }

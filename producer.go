@@ -2,117 +2,145 @@ package kafkaavro
 
 import (
 	"encoding/binary"
+	"net/url"
 
-	"github.com/cenkalti/backoff/v3"
+	"github.com/caarlos0/env/v6"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/linkedin/goavro"
+	"github.com/hamba/avro"
 	"github.com/pkg/errors"
 )
 
-type kafkaProducer interface {
+type KafkaProducer interface {
 	Close()
 	Produce(msg *kafka.Message, deliveryChan chan kafka.Event) error
 }
 
 type Producer struct {
-	producer       kafkaProducer
+	KafkaProducer
 	topicPartition kafka.TopicPartition
 
-	schemaRegistryClient       SchemaRegistryClient
-	schemaRegistrySubjectKey   string
-	schemaRegistrySubjectValue string
+	avroAPI  avro.API
+	kafkaCfg *kafka.ConfigMap
+	srURL    *url.URL
+	srClient SchemaRegistryClient
 
 	keySchemaID   int
 	valueSchemaID int
 
-	avroKeyCodec   *goavro.Codec
-	avroValueCodec *goavro.Codec
+	avroKeySchema   avro.Schema
+	avroValueSchema avro.Schema
 
 	backOffConfig backoff.BackOff
 }
 
-type ProducerConfig struct {
-	// Name of the topic where messages will be produced
-	TopicName string
-
-	// Avro schema for message key
-	KeySchema string
-
-	// Avro schema for message value
-	ValueSchema string
-
-	// Low level kafka producer used to produce messages
-	Producer kafkaProducer
-
-	// Schema registry client used for messages validation and schema management
-	SchemaRegistryClient SchemaRegistryClient
-
-	// BackOffConfig is used for setting backoff strategy for retry logic
-	BackOffConfig backoff.BackOff
-}
-
 // NewProducer is a producer that publishes messages to kafka topic using avro serialization format
-func NewProducer(cfg ProducerConfig) (*Producer, error) {
-	if cfg.Producer == nil {
-		return nil, errors.New("missing producer")
+func NewProducer(
+	topicName string,
+	keySchemaJSON, valueSchemaJSON string,
+	opts ...ProducerOption,
+) (*Producer, error) {
+	p := &Producer{
+		avroAPI: avro.DefaultConfig,
+	}
+	// Loop through each option
+	for _, opt := range opts {
+		// apply option
+		opt.applyP(p)
 	}
 
-	if cfg.SchemaRegistryClient == nil {
-		return nil, errors.New("missing schema registry client")
+	var err error
+
+	// if producer not provided - make one
+	if p.KafkaProducer == nil {
+		// if kafka config not provided - build default one
+		if p.kafkaCfg == nil {
+			var envCfg struct {
+				Broker          string `env:"KAFKA_BROKER" envDefault:"localhost:9092"`
+				CAFile          string `env:"KAFKA_CA_FILE"`
+				KeyFile         string `env:"KAFKA_KEY_FILE"`
+				CertificateFile string `env:"KAFKA_CERTIFICATE_FILE"`
+			}
+			if err := env.Parse(&envCfg); err != nil {
+				return nil, err
+			}
+
+			// default configuration
+			p.kafkaCfg = &kafka.ConfigMap{
+				"bootstrap.servers":       envCfg.Broker,
+				"socket.keepalive.enable": true,
+				"log.connection.close":    false,
+			}
+
+			if envCfg.CAFile != "" {
+				// configure SSL
+				p.kafkaCfg.SetKey("security.protocol", "ssl")
+				p.kafkaCfg.SetKey("ssl.ca.location", envCfg.CAFile)
+				p.kafkaCfg.SetKey("ssl.key.location", envCfg.KeyFile)
+				p.kafkaCfg.SetKey("ssl.certificate.location", envCfg.CertificateFile)
+			}
+		}
+
+		if p.KafkaProducer, err = kafka.NewProducer(p.kafkaCfg); err != nil {
+			return nil, errors.WithMessage(err, "cannot initialize kafka producer")
+		}
 	}
 
-	keyCodec, err := goavro.NewCodec(cfg.KeySchema)
+	if p.srClient == nil {
+		if p.srURL == nil {
+			var envCfg struct {
+				SchemaRegistry *url.URL `env:"KAFKA_SCHEMA_REGISTRY" envDefault:"http://localhost:8081"`
+			}
+			if err := env.Parse(&envCfg); err != nil {
+				return nil, err
+			}
+			p.srURL = envCfg.SchemaRegistry
+		}
+
+		if p.srClient, err = NewCachedSchemaRegistryClient(p.srURL.String()); err != nil {
+			return nil, errors.WithMessage(err, "cannot initialize schema registry client")
+		}
+	}
+
+	p.avroKeySchema, err = avro.Parse(keySchemaJSON)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot initialize key codec")
 	}
 
-	valueCodec, err := goavro.NewCodec(cfg.ValueSchema)
+	p.avroValueSchema, err = avro.Parse(valueSchemaJSON)
 	if err != nil {
 		return nil, errors.Wrap(err, "cannot initialize value codec")
 	}
 
-	schemaRegistrySubjectKey := cfg.TopicName + "-key"
-	keySchemaID, err := cfg.SchemaRegistryClient.RegisterNewSchema(schemaRegistrySubjectKey, keyCodec)
+	schemaRegistrySubjectKey := topicName + "-key"
+	p.keySchemaID, err = p.srClient.RegisterNewSchema(schemaRegistrySubjectKey, p.avroKeySchema)
 	if err != nil {
 		return nil, err
 	}
 
-	schemaRegistrySubjectValue := cfg.TopicName + "-value"
-	valueSchemaID, err := cfg.SchemaRegistryClient.RegisterNewSchema(schemaRegistrySubjectValue, valueCodec)
+	schemaRegistrySubjectValue := topicName + "-value"
+	p.valueSchemaID, err = p.srClient.RegisterNewSchema(schemaRegistrySubjectValue, p.avroValueSchema)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Producer{
-		producer: cfg.Producer,
-		topicPartition: kafka.TopicPartition{
-			Topic:     &cfg.TopicName,
-			Partition: kafka.PartitionAny,
-		},
+	p.topicPartition = kafka.TopicPartition{
+		Topic:     &topicName,
+		Partition: kafka.PartitionAny,
+	}
 
-		schemaRegistryClient:       cfg.SchemaRegistryClient,
-		schemaRegistrySubjectKey:   schemaRegistrySubjectKey,
-		schemaRegistrySubjectValue: schemaRegistrySubjectValue,
-
-		keySchemaID:   keySchemaID,
-		valueSchemaID: valueSchemaID,
-
-		avroKeyCodec:   keyCodec,
-		avroValueCodec: valueCodec,
-
-		backOffConfig: cfg.BackOffConfig,
-	}, nil
+	return p, nil
 }
 
 // Produce will try to publish message to a topic. If deliveryChan is provided then function will return immediately,
 // otherwise it will wait for delivery
 func (ap *Producer) produce(key interface{}, value interface{}, deliveryChan chan kafka.Event) error {
-	binaryKey, err := getAvroBinary(ap.keySchemaID, ap.avroKeyCodec, key)
+	binaryKey, err := ap.getAvroBinary(ap.keySchemaID, ap.avroKeySchema, key)
 	if err != nil {
 		return err
 	}
 
-	binaryValue, err := getAvroBinary(ap.valueSchemaID, ap.avroValueCodec, value)
+	binaryValue, err := ap.getAvroBinary(ap.valueSchemaID, ap.avroValueSchema, value)
 	if err != nil {
 		return err
 	}
@@ -128,7 +156,9 @@ func (ap *Producer) produce(key interface{}, value interface{}, deliveryChan cha
 		Key:            binaryKey,
 		Value:          binaryValue,
 	}
-	ap.producer.Produce(msg, deliveryChan)
+	if err = ap.KafkaProducer.Produce(msg, deliveryChan); err != nil {
+		return err
+	}
 
 	if handleError {
 		e := <-deliveryChan
@@ -152,12 +182,12 @@ func (ap *Producer) Produce(key interface{}, value interface{}, deliveryChan cha
 	return ap.produce(key, value, deliveryChan)
 }
 
-func getAvroBinary(schemaID int, codec *goavro.Codec, native interface{}) ([]byte, error) {
+func (ap *Producer) getAvroBinary(schemaID int, schema avro.Schema, value interface{}) ([]byte, error) {
 	binarySchemaId := make([]byte, 4)
 	binary.BigEndian.PutUint32(binarySchemaId, uint32(schemaID))
 
-	// Convert native Go form to binary Avro data
-	binaryValue, err := codec.BinaryFromNative(nil, native)
+	// Convert to binary Avro data
+	binaryValue, err := ap.avroAPI.Marshal(schema, value)
 	if err != nil {
 		return nil, err
 	}
@@ -171,8 +201,4 @@ func getAvroBinary(schemaID int, codec *goavro.Codec, native interface{}) ([]byt
 	binaryMsg = append(binaryMsg, binaryValue...)
 
 	return binaryMsg, nil
-}
-
-func (ac *Producer) Close() {
-	ac.producer.Close()
 }

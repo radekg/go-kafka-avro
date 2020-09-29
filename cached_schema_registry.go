@@ -3,21 +3,21 @@ package kafkaavro
 import (
 	"sync"
 
+	"github.com/hamba/avro"
 	schemaregistry "github.com/landoop/schema-registry"
-	"github.com/linkedin/goavro"
 )
 
 // Portions of the code are taken from https://github.com/dangkaka/go-kafka-avro
 
 type SchemaRegistryClient interface {
-	GetSchemaByID(id int) (*goavro.Codec, error)
-	RegisterNewSchema(subject string, codec *goavro.Codec) (int, error)
+	GetSchemaByID(id int) (avro.Schema, error)
+	RegisterNewSchema(subject string, schema avro.Schema) (int, error)
 }
 
 // CachedSchemaRegistryClient is a schema registry client that will cache some data to improve performance
 type CachedSchemaRegistryClient struct {
 	SchemaRegistryClient   *schemaregistry.Client
-	schemaCache            map[int]*goavro.Codec
+	schemaCache            map[int]avro.Schema
 	schemaCacheLock        sync.RWMutex
 	registeredSubjects     map[string]int
 	registeredSubjectsLock sync.RWMutex
@@ -30,31 +30,31 @@ func NewCachedSchemaRegistryClient(baseURL string, options ...schemaregistry.Opt
 	}
 	return &CachedSchemaRegistryClient{
 		SchemaRegistryClient: srClient,
-		schemaCache:          make(map[int]*goavro.Codec),
+		schemaCache:          make(map[int]avro.Schema),
 		registeredSubjects:   make(map[string]int),
 	}, nil
 }
 
-// GetSchemaByID will return and cache the codec with the given id
-func (cached *CachedSchemaRegistryClient) GetSchemaByID(id int) (*goavro.Codec, error) {
+// GetSchemaByID will return and cache the schema with the given id
+func (cached *CachedSchemaRegistryClient) GetSchemaByID(id int) (avro.Schema, error) {
 	cached.schemaCacheLock.RLock()
 	cachedResult := cached.schemaCache[id]
 	cached.schemaCacheLock.RUnlock()
 	if nil != cachedResult {
 		return cachedResult, nil
 	}
-	schema, err := cached.SchemaRegistryClient.GetSchemaByID(id)
+	schemaJSON, err := cached.SchemaRegistryClient.GetSchemaByID(id)
 	if err != nil {
 		return nil, err
 	}
-	codec, err := goavro.NewCodec(schema)
+	schema, err := avro.Parse(schemaJSON)
 	if err != nil {
 		return nil, err
 	}
 	cached.schemaCacheLock.Lock()
-	cached.schemaCache[id] = codec
+	cached.schemaCache[id] = schema
 	cached.schemaCacheLock.Unlock()
-	return codec, nil
+	return schema, nil
 }
 
 // Subjects returns a list of subjects
@@ -67,34 +67,33 @@ func (cached *CachedSchemaRegistryClient) Versions(subject string) ([]int, error
 	return cached.SchemaRegistryClient.Versions(subject)
 }
 
-// GetSchemaBySubject returns the codec for a specific version of a subject
-func (cached *CachedSchemaRegistryClient) GetSchemaBySubject(subject string, version int) (*goavro.Codec, error) {
+// GetSchemaBySubject returns the schema for a specific version of a subject
+func (cached *CachedSchemaRegistryClient) GetSchemaBySubject(subject string, version int) (avro.Schema, error) {
 	schema, err := cached.SchemaRegistryClient.GetSchemaBySubject(subject, version)
 	if err != nil {
 		return nil, err
 	}
-	return goavro.NewCodec(schema.Schema)
+	return avro.Parse(schema.Schema)
 }
 
 // GetLatestSchema returns the highest version schema for a subject
-func (cached *CachedSchemaRegistryClient) GetLatestSchema(subject string) (*goavro.Codec, error) {
+func (cached *CachedSchemaRegistryClient) GetLatestSchema(subject string) (avro.Schema, error) {
 	schema, err := cached.SchemaRegistryClient.GetLatestSchema(subject)
 	if err != nil {
 		return nil, err
 	}
-	return goavro.NewCodec(schema.Schema)
+	return avro.Parse(schema.Schema)
 }
 
-// RegisterNewSchema will return and cache the id with the given codec
-func (cached *CachedSchemaRegistryClient) RegisterNewSchema(subject string, codec *goavro.Codec) (int, error) {
-	schemaJson := codec.Schema()
+// RegisterNewSchema will return and cache the id with the given schema
+func (cached *CachedSchemaRegistryClient) RegisterNewSchema(subject string, schema avro.Schema) (int, error) {
 	cached.registeredSubjectsLock.RLock()
 	cachedResult, found := cached.registeredSubjects[subject]
 	cached.registeredSubjectsLock.RUnlock()
 	if found {
 		return cachedResult, nil
 	}
-	id, err := cached.SchemaRegistryClient.RegisterNewSchema(subject, schemaJson)
+	id, err := cached.SchemaRegistryClient.RegisterNewSchema(subject, schema.String())
 	if err != nil {
 		return 0, err
 	}
@@ -104,9 +103,9 @@ func (cached *CachedSchemaRegistryClient) RegisterNewSchema(subject string, code
 	return id, nil
 }
 
-// IsSchemaRegistered checks if a specific codec is already registered to a subject
-func (cached *CachedSchemaRegistryClient) IsSchemaRegistered(subject string, codec *goavro.Codec) (bool, schemaregistry.Schema, error) {
-	return cached.SchemaRegistryClient.IsRegistered(subject, codec.Schema())
+// IsSchemaRegistered checks if a specific schema is already registered to a subject
+func (cached *CachedSchemaRegistryClient) IsSchemaRegistered(subject string, schema avro.Schema) (bool, schemaregistry.Schema, error) {
+	return cached.SchemaRegistryClient.IsRegistered(subject, schema.String())
 }
 
 // DeleteSubject deletes the subject, should only be used in development
