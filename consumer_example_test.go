@@ -19,7 +19,7 @@ func ExampleNewConsumer() {
 		FieldName string `avro:"field_name"`
 	}
 
-	kafkaavro.NewConsumer(
+	c, err := kafkaavro.NewConsumer(
 		[]string{"topic1"},
 		func(topic string) interface{} {
 			return val{}
@@ -38,4 +38,17 @@ func ExampleNewConsumer() {
 		}),
 		kafkaavro.WithSchemaRegistryURL(srURL),
 	)
+
+	for {
+		msg, err := c.ReadMessage(5000)
+		if err != nil {
+			log.Println("Error", err)
+			continue
+		}
+		switch msg.Value.(type) {
+
+		}
+		log.Println(msg.Value)
+	}
+
 }

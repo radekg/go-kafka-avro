@@ -1,4 +1,4 @@
-module github.com/mycujoo/go-kafka-avro
+module github.com/mycujoo/go-kafka-avro/v2
 
 go 1.12
 

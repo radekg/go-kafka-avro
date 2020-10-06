@@ -18,8 +18,18 @@ func (e ErrInvalidValue) Error() string {
 	return fmt.Sprintf("invalid value for topic: %s", e.Topic)
 }
 
+func IsErrInvalidValue(err error) bool {
+	_, ok := err.(ErrInvalidValue)
+	return ok
+}
+
 type ErrFailedCommit struct {
 	Err error
+}
+
+func IsErrFailedCommit(err error) bool {
+	_, ok := err.(ErrFailedCommit)
+	return ok
 }
 
 func (e ErrFailedCommit) Error() string {
