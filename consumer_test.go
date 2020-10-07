@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	kafkaavro "github.com/mycujoo/go-kafka-avro"
+	kafkaavro "github.com/mycujoo/go-kafka-avro/v2"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )

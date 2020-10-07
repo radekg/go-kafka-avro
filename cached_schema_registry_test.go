@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/hamba/avro"
-	kafkaavro "github.com/mycujoo/go-kafka-avro"
+	kafkaavro "github.com/mycujoo/go-kafka-avro/v2"
 )
 
 // Portions of the code are taken from https://github.com/dangkaka/go-kafka-avro
