@@ -1,13 +1,7 @@
 package kafkaavro
 
 import (
-	"errors"
 	"fmt"
-)
-
-var (
-	ErrPollTimeout  = errors.New("poll timeout")
-	ErrPartitionEOF = errors.New("topic EOF")
 )
 
 type ErrInvalidValue struct {

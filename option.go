@@ -105,6 +105,12 @@ func WithoutTopicsCheck() ConsumerOption {
 	}}
 }
 
+func WithEventHandler(handler EventHandler) ConsumerOption {
+	return funcConsumerOption{func(o *Consumer) {
+		o.eventHandler = handler
+	}}
+}
+
 type funcProducerOption struct {
 	f func(*Producer)
 }

@@ -3,6 +3,7 @@ package kafkaavro
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net/url"
 
 	"github.com/caarlos0/env/v6"
@@ -21,6 +22,7 @@ type KafkaConsumer interface {
 type Consumer struct {
 	KafkaConsumer
 	valueFactory ValueFactory
+	eventHandler EventHandler
 	ensureTopics bool
 	avroAPI      avro.API
 	kafkaCfg     *kafka.ConfigMap
@@ -29,6 +31,7 @@ type Consumer struct {
 }
 
 type ValueFactory func(topic string) interface{}
+type EventHandler func(event kafka.Event)
 
 type Message struct {
 	*kafka.Message
@@ -106,6 +109,12 @@ func NewConsumer(topics []string, valueFactory ValueFactory, opts ...ConsumerOpt
 		}
 	}
 
+	if c.eventHandler == nil {
+		c.eventHandler = func(event kafka.Event) {
+			log.Println(event)
+		}
+	}
+
 	if topics != nil {
 		if err := c.KafkaConsumer.SubscribeTopics(topics, nil); err != nil {
 			return nil, err
@@ -129,9 +138,8 @@ func (ac *Consumer) fetchMessage(timeoutMs int) (*kafka.Message, error) {
 	switch e := ev.(type) {
 	case *kafka.Message:
 		return e, nil
-	case kafka.PartitionEOF:
-		return nil, ErrPartitionEOF
 	default:
+		ac.eventHandler(e)
 		return nil, nil
 	}
 }
@@ -142,7 +150,7 @@ func (ac *Consumer) FetchMessage(timeoutMs int) (*Message, error) {
 		return nil, err
 	}
 	if msg == nil {
-		return nil, ErrPollTimeout
+		return nil, nil
 	}
 
 	value := ac.valueFactory(*msg.TopicPartition.Topic)

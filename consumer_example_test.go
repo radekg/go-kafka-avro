@@ -37,6 +37,9 @@ func ExampleNewConsumer() {
 			"auto.offset.reset":        "earliest",
 		}),
 		kafkaavro.WithSchemaRegistryURL(srURL),
+		kafkaavro.WithEventHandler(func(event kafka.Event) {
+			log.Println(event)
+		}),
 	)
 
 	for {
@@ -45,10 +48,13 @@ func ExampleNewConsumer() {
 			log.Println("Error", err)
 			continue
 		}
-		switch msg.Value.(type) {
-
+		if msg == nil {
+			continue
 		}
-		log.Println(msg.Value)
+		switch v := msg.Value.(type) {
+		case val:
+			log.Println(v)
+		}
 	}
 
 }
