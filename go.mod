@@ -1,6 +1,6 @@
 module github.com/mycujoo/go-kafka-avro/v2
 
-go 1.12
+go 1.15
 
 require (
 	github.com/caarlos0/env/v6 v6.4.0
