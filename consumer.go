@@ -13,6 +13,7 @@ import (
 )
 
 type KafkaConsumer interface {
+	Close() error
 	CommitMessage(m *kafka.Message) ([]kafka.TopicPartition, error)
 	SubscribeTopics(topics []string, rebalanceCb kafka.RebalanceCb) (err error)
 	Poll(timeoutMs int) kafka.Event
@@ -28,6 +29,8 @@ type Consumer struct {
 	kafkaCfg     *kafka.ConfigMap
 	srURL        *url.URL
 	srClient     SchemaRegistryClient
+
+	autoCommits bool
 }
 
 type ValueFactory func(topic string) interface{}
@@ -127,6 +130,13 @@ func NewConsumer(topics []string, valueFactory ValueFactory, opts ...ConsumerOpt
 		}
 	}
 
+	if cfgVal, err := c.kafkaCfg.Get("enable.auto.commit", false); err == nil {
+		switch vType := cfgVal.(type) {
+		case bool:
+			c.autoCommits = vType
+		}
+	}
+
 	return c, nil
 }
 
@@ -170,8 +180,10 @@ func (ac *Consumer) ReadMessage(timeoutMs int) (*Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = ac.KafkaConsumer.CommitMessage(msg.Message); err != nil {
-		err = ErrFailedCommit{Err: err}
+	if ac.autoCommits && msg != nil { // FetchMessage may return a nil msg
+		if _, err = ac.KafkaConsumer.CommitMessage(msg.Message); err != nil {
+			err = ErrFailedCommit{Err: err}
+		}
 	}
 	return msg, err
 }

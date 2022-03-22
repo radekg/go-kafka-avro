@@ -47,6 +47,14 @@ func (m *mockKafkaProducer) Close() {
 	m.Called()
 }
 
+func (m *mockKafkaProducer) GetMetadata(topic *string, allTopics bool, timeoutMs int) (*kafka.Metadata, error) {
+	return &kafka.Metadata{}, nil
+}
+
+func (m *mockKafkaProducer) OffsetsForTimes(times []kafka.TopicPartition, timeoutMs int) (offsets []kafka.TopicPartition, err error) {
+	return []kafka.TopicPartition{}, nil
+}
+
 func (m *mockKafkaProducer) Produce(msg *kafka.Message, deliveryChan chan kafka.Event) error {
 	ret := m.Called(msg, deliveryChan)
 	go func(deliveryChan chan kafka.Event) {
@@ -55,4 +63,8 @@ func (m *mockKafkaProducer) Produce(msg *kafka.Message, deliveryChan chan kafka.
 		}
 	}(deliveryChan)
 	return ret.Error(0)
+}
+
+func (m *mockKafkaProducer) QueryWatermarkOffsets(topic string, partition int32, timeoutMs int) (low, high int64, err error) {
+	return 0, 0, nil
 }

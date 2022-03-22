@@ -13,7 +13,10 @@ import (
 
 type KafkaProducer interface {
 	Close()
+	GetMetadata(topic *string, allTopics bool, timeoutMs int) (*kafka.Metadata, error)
+	OffsetsForTimes(times []kafka.TopicPartition, timeoutMs int) (offsets []kafka.TopicPartition, err error)
 	Produce(msg *kafka.Message, deliveryChan chan kafka.Event) error
+	QueryWatermarkOffsets(topic string, partition int32, timeoutMs int) (low, high int64, err error)
 }
 
 type Producer struct {

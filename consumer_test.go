@@ -36,6 +36,10 @@ type mockKafkaConsumer struct {
 	mock.Mock
 }
 
+func (m *mockKafkaConsumer) Close() error {
+	return nil
+}
+
 func (m *mockKafkaConsumer) CommitMessage(msg *kafka.Message) ([]kafka.TopicPartition, error) {
 	ret := m.Called(msg)
 	return ret.Get(0).([]kafka.TopicPartition), ret.Error(1)
